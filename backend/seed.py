@@ -18,12 +18,13 @@ DB_URL = "postgresql://workbrew:workbrew@127.0.0.1:5433/workbrew"
 
 NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
 DETAILS_URL = "https://places.googleapis.com/v1/places/{}"
+PHOTO_MEDIA_URL = "https://places.googleapis.com/v1/{}/media"
 
 NEARBY_FIELD_MASK = "places.id"
 DETAILS_FIELD_MASK = (
     "id,displayName,formattedAddress,location,"
     "rating,userRatingCount,priceLevel,"
-    "regularOpeningHours,reviews"
+    "regularOpeningHours,reviews,photos"
 )
 
 PRICE_MAP = {
@@ -69,6 +70,26 @@ def nearby_search(lat, lng, radius):
     return [p["id"] for p in resp.json().get("places", [])]
 
 
+def fetch_photo_url(photos: list) -> str | None:
+    """Given the photos array from Place Details, resolve the first photo to a CDN URL."""
+    if not photos:
+        return None
+    photo_name = photos[0].get("name")
+    if not photo_name:
+        return None
+    try:
+        media_resp = requests.get(
+            PHOTO_MEDIA_URL.format(photo_name),
+            params={"maxWidthPx": 800, "key": API_KEY},
+            allow_redirects=True,
+            timeout=10,
+        )
+        media_resp.raise_for_status()
+        return media_resp.url
+    except Exception:
+        return None
+
+
 def place_details(place_id):
     resp = requests.get(
         DETAILS_URL.format(place_id),
@@ -88,6 +109,7 @@ def parse_shop(data):
         if r.get("text", {}).get("text")
     ]
     loc = data.get("location", {})
+    photo_url = fetch_photo_url(data.get("photos", []))
     return {
         "id": data["id"],
         "name": data.get("displayName", {}).get("text"),
@@ -99,6 +121,7 @@ def parse_shop(data):
         "price_level": PRICE_MAP.get(data.get("priceLevel")),
         "opening_hours": data.get("regularOpeningHours"),
         "reviews_raw": reviews_raw,
+        "photo_url": photo_url,
     }
 
 
@@ -106,14 +129,42 @@ INSERT_SQL = """
 INSERT INTO shops (
     id, name, address, lat, lng,
     google_rating, google_review_count, price_level,
-    opening_hours, reviews_raw
+    opening_hours, reviews_raw, photo_url
 ) VALUES (
     %(id)s, %(name)s, %(address)s, %(lat)s, %(lng)s,
     %(google_rating)s, %(google_review_count)s, %(price_level)s,
-    %(opening_hours)s, %(reviews_raw)s
+    %(opening_hours)s, %(reviews_raw)s, %(photo_url)s
 )
 ON CONFLICT (id) DO NOTHING;
 """
+
+
+def backfill_photos(conn):
+    """Backfill photo_url for shops that were seeded without it."""
+    cur = conn.cursor()
+    cur.execute("SELECT id, name FROM shops WHERE photo_url IS NULL ORDER BY name;")
+    shops = cur.fetchall()
+    if not shops:
+        print("No shops need photo backfill.")
+        cur.close()
+        return
+
+    print(f"\nBackfilling photos for {len(shops)} shops...")
+    for shop_id, name in shops:
+        try:
+            data = place_details(shop_id)
+            url = fetch_photo_url(data.get("photos", []))
+            if url:
+                cur.execute("UPDATE shops SET photo_url = %s WHERE id = %s;", (url, shop_id))
+                conn.commit()
+                print(f"  ✓ {name}")
+            else:
+                print(f"  ~ no photo: {name}")
+        except Exception as e:
+            print(f"  ✗ {name}: {e}")
+        time.sleep(0.3)
+    cur.close()
+    print("Photo backfill done.")
 
 
 def main():
@@ -156,12 +207,16 @@ def main():
             else:
                 skipped += 1
                 print(f"  [{i:02d}/{len(place_ids)}] ~ skipped (already exists): {shop['name']}")
-            time.sleep(0.2)
+            time.sleep(0.3)
         except Exception as e:
             print(f"  [{i:02d}/{len(place_ids)}] ✗ {pid}: {e}")
 
     conn.commit()
     cur.close()
+
+    # Backfill photos for any shops missing them (including pre-existing ones)
+    backfill_photos(conn)
+
     conn.close()
     print(f"\nDone. Inserted: {inserted}, Skipped: {skipped}")
 
