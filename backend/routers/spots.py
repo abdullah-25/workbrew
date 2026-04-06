@@ -1,14 +1,58 @@
 import os
+import json
+import time
+import re
 import psycopg2
 import psycopg2.extras
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from dotenv import load_dotenv
+from google import genai
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
 DB_URL = "postgresql://workbrew:workbrew@127.0.0.1:5433/workbrew"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 router = APIRouter()
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+_last_gemini_call = 0.0
+
+
+class UserPreferences(BaseModel):
+    work_type: str = "Mixed"
+    noise_preference: str = "No preference"
+    session_length: str = "Half day (2-4hrs)"
+    must_haves: list[str] = []
+
+
+class RecommendRequest(BaseModel):
+    query: str
+    preferences: UserPreferences | None = None
+
+
+RECOMMEND_PROMPT = """You are a Toronto cafe recommendation engine for remote workers.
+
+{profile_section}
+
+CAFE DATABASE:
+{cafes_json}
+
+USER REQUEST: "{query}"
+
+Return ONLY valid JSON — an array of exactly 5 objects, ranked best match first:
+[{{"id": "<cafe id>", "reasoning": "<1 sentence explaining why this cafe matches, under 120 chars>"}}]
+
+Rules:
+- Reasoning must be specific to the user's request and profile, not generic
+- Reference actual scores or attributes from the data
+- If the request mentions noise/quiet, weight noise_score heavily
+- If the request mentions wifi/internet, weight wifi_score heavily
+- If the request mentions long sessions/hours, weight longevity_score heavily
+- If the request mentions meetings/calls, consider noise and wifi together
+- Weight your ranking toward the user's profile preferences first, then refine by their specific request
+- Keep each reasoning under 120 characters
+"""
 
 
 def wifi_label(score: float | None) -> str:
