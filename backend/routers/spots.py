@@ -136,3 +136,79 @@ def get_spots():
             "coordinates": [float(row["lat"]), float(row["lng"])],
         })
     return result
+
+
+@router.post("/spots/recommend")
+def recommend_spots(req: RecommendRequest):
+    global _last_gemini_call
+
+    if len(req.query.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Query must be at least 3 characters.")
+
+    now = time.time()
+    if now - _last_gemini_call < 4.0:
+        raise HTTPException(status_code=429, detail="Please wait a few seconds between requests.")
+
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT
+            s.id, s.name, s.address,
+            wp.wifi_score, wp.noise_score, wp.outlet_score,
+            wp.longevity_score, wp.focus_score, wp.work_rating,
+            wp.work_summary, wp.best_for, wp.avoid_if
+        FROM shops s
+        JOIN work_profiles wp ON wp.shop_id = s.id
+        WHERE s.work_profile_status = 'done';
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    cafes = []
+    for row in rows:
+        cafes.append({
+            "id": row["id"],
+            "name": row["name"],
+            "area": extract_neighborhood(row["address"]),
+            "wifi": float(row["wifi_score"]) if row["wifi_score"] else 5,
+            "noise": float(row["noise_score"]) if row["noise_score"] else 5,
+            "outlets": float(row["outlet_score"]) if row["outlet_score"] else 5,
+            "longevity": float(row["longevity_score"]) if row["longevity_score"] else 5,
+            "focus": float(row["focus_score"]) if row["focus_score"] else 5,
+            "rating": round(float(row["work_rating"]), 1) if row["work_rating"] else 0,
+            "best_for": row["best_for"] or [],
+            "avoid_if": row["avoid_if"] or [],
+            "summary": row["work_summary"] or "",
+        })
+
+    profile_section = ""
+    if req.preferences:
+        p = req.preferences
+        profile_section = f"""USER PROFILE:
+- Work style: {p.work_type}
+- Noise preference: {p.noise_preference}
+- Typical session: {p.session_length}
+- Must-haves: {', '.join(p.must_haves) if p.must_haves else 'None specified'}"""
+
+    prompt = RECOMMEND_PROMPT.format(
+        profile_section=profile_section or "No user profile provided.",
+        cafes_json=json.dumps(cafes),
+        query=req.query.strip(),
+    )
+
+    try:
+        _last_gemini_call = time.time()
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash", contents=prompt
+        )
+        text = response.text.strip()
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+        results = json.loads(text)
+        valid_ids = {c["id"] for c in cafes}
+        results = [r for r in results if r.get("id") in valid_ids][:5]
+    except Exception:
+        raise HTTPException(status_code=503, detail="AI recommendation temporarily unavailable. Please try again.")
+
+    return {"query": req.query, "results": results}
