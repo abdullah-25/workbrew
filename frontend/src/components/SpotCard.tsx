@@ -79,15 +79,21 @@ export function SpotCard({
 
         {/* Amenity Pills */}
         <div className="flex flex-wrap gap-2 mt-1">
-          <span className="text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full border-[0.5px] border-blue-200">
-            {spot.amenities.wifi}
-          </span>
-          <span className="text-xs bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full border-[0.5px] border-emerald-200">
-            {spot.amenities.noise}
-          </span>
-          <span className="text-xs bg-amber-50 text-amber-700 px-2.5 py-1 rounded-full border-[0.5px] border-amber-200">
-            {spot.amenities.outlets}
-          </span>
+          {spot.amenities.wifi !== 'Unknown' && (
+            <span className="text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full border-[0.5px] border-blue-200">
+              {spot.amenities.wifi}
+            </span>
+          )}
+          {spot.amenities.noise !== 'Unknown' && (
+            <span className="text-xs bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full border-[0.5px] border-emerald-200">
+              {spot.amenities.noise}
+            </span>
+          )}
+          {spot.amenities.outlets !== 'Unknown' && (
+            <span className="text-xs bg-amber-50 text-amber-700 px-2.5 py-1 rounded-full border-[0.5px] border-amber-200">
+              {spot.amenities.outlets}
+            </span>
+          )}
         </div>
 
         {/* CTA */}
