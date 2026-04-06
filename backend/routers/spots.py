@@ -15,8 +15,15 @@ DB_URL = "postgresql://workbrew:workbrew@127.0.0.1:5433/workbrew"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 router = APIRouter()
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+_gemini_client = None
 _last_gemini_call = 0.0
+
+
+def get_gemini_client():
+    global _gemini_client
+    if _gemini_client is None:
+        _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    return _gemini_client
 
 
 class UserPreferences(BaseModel):
@@ -199,7 +206,7 @@ def recommend_spots(req: RecommendRequest):
 
     try:
         _last_gemini_call = time.time()
-        response = gemini_client.models.generate_content(
+        response = get_gemini_client().models.generate_content(
             model="gemini-2.5-flash", contents=prompt
         )
         text = response.text.strip()
