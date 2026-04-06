@@ -38,7 +38,7 @@ export function LeftNav({ activeItem, onItemClick }: LeftNavProps) {
           >
             <Icon
               size={18}
-              className={activeItem === id ? "text-text" : "text-muted"}
+              className={`flex-shrink-0 ${activeItem === id ? "text-text" : "text-muted"}`}
             />
             <span
               className={`text-sm ${activeItem === id ? "font-medium text-text" : "text-muted"}`}
