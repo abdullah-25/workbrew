@@ -11,11 +11,17 @@ from psycopg2.extras import Json, execute_values
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from services.reviews import prepare_reviews_for_prompt
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-DB_URL = "postgresql://workbrew:workbrew@127.0.0.1:5433/workbrew"
+DB_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://workbrew:workbrew@127.0.0.1:5433/workbrew",
+)
 
 # Rate limiting: Gemini free tier allows ~15 RPM
 REQUEST_DELAY = 4.5  # seconds between requests (~13 RPM, safe buffer)
@@ -67,7 +73,10 @@ def call_gemini(shop: dict) -> dict:
     if not reviews:
         return None
 
-    reviews_text = "\n".join(f"- {r}" for r in reviews)
+    reviews_text = prepare_reviews_for_prompt(reviews)
+    if not reviews_text:
+        return None
+
     prompt = REFINE_PROMPT.format(
         name=shop["name"],
         google_rating=shop["google_rating"] or "N/A",
