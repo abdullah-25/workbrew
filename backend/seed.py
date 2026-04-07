@@ -14,7 +14,10 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 API_KEY = os.environ["GOOGLE_MAPS_API_KEY"]
-DB_URL = "postgresql://workbrew:workbrew@127.0.0.1:5433/workbrew"
+DB_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://workbrew:workbrew@127.0.0.1:5433/workbrew",
+)
 
 NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
 DETAILS_URL = "https://places.googleapis.com/v1/places/{}"

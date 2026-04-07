@@ -8,10 +8,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from google import genai
+from services.reviews import prepare_reviews_for_prompt
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
-DB_URL = "postgresql://workbrew:workbrew@127.0.0.1:5433/workbrew"
+DB_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://workbrew:workbrew@127.0.0.1:5433/workbrew",
+)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 router = APIRouter()
@@ -156,11 +160,17 @@ def recommend_spots(req: RecommendRequest):
     if now - _last_gemini_call < 4.0:
         raise HTTPException(status_code=429, detail="Please wait a few seconds between requests.")
 
+    if not GEMINI_API_KEY.strip():
+        raise HTTPException(
+            status_code=503,
+            detail="Add GEMINI_API_KEY to your .env file at the project root to enable AI search.",
+        )
+
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         SELECT
-            s.id, s.name, s.address,
+            s.id, s.name, s.address, s.reviews_raw,
             wp.wifi_score, wp.noise_score, wp.outlet_score,
             wp.longevity_score, wp.focus_score, wp.work_rating,
             wp.work_summary, wp.best_for, wp.avoid_if
@@ -187,6 +197,7 @@ def recommend_spots(req: RecommendRequest):
             "best_for": row["best_for"] or [],
             "avoid_if": row["avoid_if"] or [],
             "summary": row["work_summary"] or "",
+            "reviews": prepare_reviews_for_prompt(row["reviews_raw"] or []),
         })
 
     profile_section = ""
@@ -207,9 +218,14 @@ def recommend_spots(req: RecommendRequest):
     try:
         _last_gemini_call = time.time()
         response = get_gemini_client().models.generate_content(
-            model="gemini-2.5-flash", contents=prompt
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config={"thinking_config": {"thinking_budget": 0}},
         )
-        text = response.text.strip()
+        raw_text = response.text
+        text = (raw_text or "").strip()
+        if not text:
+            raise ValueError("empty model response text")
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
         results = json.loads(text)

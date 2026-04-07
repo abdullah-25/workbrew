@@ -9,6 +9,11 @@ FAKE_DB_ROWS = [
         "id": "cafe_1",
         "name": "Quiet Bean",
         "address": "123 Queen St W, Toronto, ON",
+        "reviews_raw": [
+            "The wifi is super fast and reliable, great for working.",
+            "Very quiet atmosphere, I study here every week.",
+            "Nice coffee and friendly staff.",
+        ],
         "wifi_score": 9,
         "noise_score": 9,
         "outlet_score": 8,
@@ -23,6 +28,10 @@ FAKE_DB_ROWS = [
         "id": "cafe_2",
         "name": "Buzz Hub",
         "address": "456 King St E, Toronto, ON",
+        "reviews_raw": [
+            "Loud music, hard to focus but great vibe.",
+            "Outlets are limited, bring your own charger.",
+        ],
         "wifi_score": 7,
         "noise_score": 4,
         "outlet_score": 6,
@@ -37,6 +46,7 @@ FAKE_DB_ROWS = [
         "id": "cafe_3",
         "name": "Code Corner",
         "address": "789 Bloor St W, Toronto, ON",
+        "reviews_raw": [],
         "wifi_score": 8,
         "noise_score": 7,
         "outlet_score": 9,
@@ -115,6 +125,8 @@ def test_recommend_returns_ranked_results(client, mock_gemini):
     })
 
     assert resp.status_code == 200
+    call_kw = mock_gemini.models.generate_content.call_args.kwargs
+    assert call_kw.get("config", {}).get("thinking_config", {}).get("thinking_budget") == 0
     data = resp.json()
     assert data["query"] == "quiet place for coding"
     assert len(data["results"]) == 3  # only 3 cafes in fake DB
@@ -161,6 +173,22 @@ def test_recommend_query_too_short(client):
     assert "at least 3 characters" in resp.json()["detail"]
 
 
+def test_recommend_requires_gemini_api_key(client, mock_db):
+    import routers.spots as spots_mod
+
+    prev = spots_mod.GEMINI_API_KEY
+    spots_mod.GEMINI_API_KEY = ""
+    try:
+        resp = client.post(
+            "/api/spots/recommend",
+            json={"query": "quiet place for coding"},
+        )
+        assert resp.status_code == 503
+        assert "GEMINI_API_KEY" in resp.json()["detail"]
+    finally:
+        spots_mod.GEMINI_API_KEY = prev
+
+
 def test_recommend_rate_limit(client, mock_gemini):
     """Rapid sequential calls should be rate-limited."""
     mock_gemini.models.generate_content.return_value = make_mock_gemini_response(GEMINI_RESPONSE_JSON)
@@ -177,6 +205,14 @@ def test_recommend_rate_limit(client, mock_gemini):
 
 def test_recommend_gemini_failure(client, mock_gemini):
     mock_gemini.models.generate_content.side_effect = Exception("API error")
+
+    resp = client.post("/api/spots/recommend", json={"query": "quiet place for coding"})
+    assert resp.status_code == 503
+    assert "unavailable" in resp.json()["detail"].lower()
+
+
+def test_recommend_empty_model_text_is_503(client, mock_gemini):
+    mock_gemini.models.generate_content.return_value = make_mock_gemini_response("")
 
     resp = client.post("/api/spots/recommend", json={"query": "quiet place for coding"})
     assert resp.status_code == 503
@@ -205,3 +241,22 @@ def test_recommend_filters_invalid_ids(client, mock_gemini):
     ids = [r["id"] for r in resp.json()["results"]]
     assert "FAKE_ID" not in ids
     assert len(ids) == 2
+
+
+def test_recommend_includes_work_relevant_reviews_in_prompt(client, mock_gemini):
+    """Work-relevant reviews appear in the Gemini prompt; off-topic ones are filtered."""
+    mock_gemini.models.generate_content.return_value = make_mock_gemini_response(GEMINI_RESPONSE_JSON)
+
+    resp = client.post("/api/spots/recommend", json={"query": "quiet place for coding"})
+    assert resp.status_code == 200
+
+    prompt_text = mock_gemini.models.generate_content.call_args.kwargs.get("contents", "")
+    # Work-relevant reviews from cafe_1 should appear in the prompt
+    assert "wifi is super fast" in prompt_text
+    assert "quiet atmosphere" in prompt_text
+    # General reviews (up to 2) are included as context — "Nice coffee" should be present
+    assert "Nice coffee and friendly staff" in prompt_text
+    # cafe_3 has no reviews — should not cause errors, cafe still appears
+    assert "Code Corner" in prompt_text
+    # Reviews from cafe_2 (loud noise / outlet keywords) should appear
+    assert "Loud music" in prompt_text

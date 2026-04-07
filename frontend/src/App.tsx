@@ -101,9 +101,28 @@ export function App() {
         }),
       });
       if (!res.ok) {
+        let serverMessage: string | null = null;
+        try {
+          const body = (await res.json()) as {
+            detail?: string | { msg?: string }[];
+          };
+          if (typeof body?.detail === "string") serverMessage = body.detail;
+          else if (Array.isArray(body?.detail)) {
+            serverMessage = body.detail
+              .map((e) =>
+                typeof e === "object" && e && "msg" in e ? String(e.msg) : "",
+              )
+              .filter(Boolean)
+              .join("; ");
+          }
+        } catch {
+          /* ignore non-JSON error bodies */
+        }
         if (res.status === 429)
           throw new Error("Please wait a few seconds and try again.");
-        throw new Error("Recommendations unavailable right now.");
+        throw new Error(
+          serverMessage || "Recommendations unavailable right now.",
+        );
       }
       const data = await res.json();
       setAiResults(data.results);
