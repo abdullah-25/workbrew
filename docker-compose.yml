@@ -4,6 +4,8 @@ services:
     ports:
       - "3000:3000"
     env_file: .env
+    environment:
+      BACKEND_PROXY_TARGET: http://backend:8000
 
   backend:
     build: ./backend
