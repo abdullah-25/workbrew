@@ -51,7 +51,10 @@ CAFE DATABASE:
 
 USER REQUEST: "{query}"
 
-Return ONLY valid JSON — an array of exactly 5 objects, ranked best match first:
+If the user request is NOT related to finding a cafe or work space (e.g. greetings, general questions, unrelated topics), return ONLY:
+[{{"off_topic": true}}]
+
+Otherwise, return ONLY valid JSON — an array of exactly 5 objects, ranked best match first:
 [{{"id": "<cafe id>", "reasoning": "<1 sentence explaining why this cafe matches, under 120 chars>"}}]
 
 Rules:
@@ -229,8 +232,12 @@ def recommend_spots(req: RecommendRequest):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
         results = json.loads(text)
+        if results and results[0].get("off_topic"):
+            raise HTTPException(status_code=400, detail="I can only help with cafe recommendations.")
         valid_ids = {c["id"] for c in cafes}
         results = [r for r in results if r.get("id") in valid_ids][:5]
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=503, detail="AI recommendation temporarily unavailable. Please try again.")
 
