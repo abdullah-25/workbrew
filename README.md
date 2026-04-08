@@ -28,7 +28,17 @@ The area I invested most in was making the AI recommendation both cheaper and mo
 
 On the prompt side, the recommend endpoint injects a structured `USER PROFILE` block — work style, noise preference, session length, must-haves — and instructs the model to weight the profile first, then refine by the specific query. This means the same question returns different results for different users. Off-topic requests are caught at the model level (the prompt instructs a structured `off_topic` flag) rather than with brittle keyword filters, keeping the logic clean. Together these choices reduced prompt size, improved ranking consistency, and made the cost-per-request predictable enough for a shared app.
 
-## What I would build with 80 hours instead of 8
+## How I leveraged AI — inside the app and to build it
+
+**Inside the app**, AI does two distinct jobs. The offline scoring pipeline (`score_shops.py`) sends each café's raw Google reviews to Gemini and asks it to produce structured scores — wifi, noise, outlets, longevity, focus — plus a one-sentence work summary and `best_for` / `avoid_if` tags. This runs once and the results are stored in Postgres, so every user gets pre-computed AI summaries without paying inference cost at request time. The live AI feature is the recommendation endpoint: it takes the user's natural-language query, merges it with their saved work profile, and asks Gemini to rank the top 5 cafés from the scored dataset with a one-sentence explanation per result. Because the profile is injected into every prompt, the same question returns different answers for different users.
+
+**To build the app**, I used Claude Code throughout — planning the architecture, writing and refactoring backend services, debugging the scoring pipeline, and testing the API. My role was directing the work, reviewing every output, and making the judgment calls on what to keep, cut, or redo. The design system was generated using Magic Patterns and stored in `.claude/CLAUDE.md` so that Claude Code could reference it consistently across every component — colours, spacing, typography, and component rules — without needing to re-specify it each time.
+
+## Trade-offs and judgment calls
+
+**localStorage over a users table.** User preferences and saved spots are stored in the browser rather than in Postgres. The honest reason is time: building auth, a sessions table, and a login flow would have consumed most of the 8 hours and left little room for the data and AI layers that are the actual differentiator. The cost is that preferences don't roam across devices. For a local prototype targeting a single user, that's an acceptable cut — but it's the first thing to revisit before a real launch.
+
+**One global Gemini client with a 4-second cooldown.** Rather than per-user request queuing or a token bucket, the recommend endpoint uses a single in-process lock and a minimum gap between Gemini calls. This is simple and prevents the most obvious cost abuse, but it serialises all recommendation requests globally — two users hitting the endpoint at the same time means one waits. For a shared production deployment the right solution is a proper per-IP rate limiter backed by Redis, but for a local single-user prototype the tradeoff is worth the reduced complexity.
 
 The biggest gap right now is that the app answers "where should I work?" but not "should I go there _today_?" With more time the priorities would be:
 
