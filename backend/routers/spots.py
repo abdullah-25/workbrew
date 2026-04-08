@@ -2,10 +2,11 @@ import os
 import json
 import time
 import re
+import threading
 import psycopg2
 import psycopg2.extras
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 from google import genai
 from services.reviews import prepare_reviews_for_prompt
@@ -21,6 +22,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 router = APIRouter()
 _gemini_client = None
 _last_gemini_call = 0.0
+_gemini_lock = threading.Lock()
 
 
 def get_gemini_client():
@@ -30,15 +32,47 @@ def get_gemini_client():
     return _gemini_client
 
 
+_ALLOWED_WORK_TYPES = {"Deep focus", "Meetings / calls", "Mixed", "Creative work"}
+_ALLOWED_NOISE_PREFS = {"Quiet", "Moderate", "Lively", "No preference"}
+_ALLOWED_SESSION_LENGTHS = {"Quick (under 2hrs)", "Half day (2-4hrs)", "Full day (4hrs+)"}
+_ALLOWED_MUST_HAVES = {"Fast WiFi", "Power outlets", "Good coffee", "Food options", "Accessible", "Outdoor seating"}
+
+
 class UserPreferences(BaseModel):
     work_type: str = "Mixed"
     noise_preference: str = "No preference"
     session_length: str = "Half day (2-4hrs)"
-    must_haves: list[str] = []
+    must_haves: list[str] = Field(default_factory=list, max_length=6)
+
+    @field_validator("work_type")
+    @classmethod
+    def validate_work_type(cls, v: str) -> str:
+        if v not in _ALLOWED_WORK_TYPES:
+            return "Mixed"
+        return v
+
+    @field_validator("noise_preference")
+    @classmethod
+    def validate_noise_preference(cls, v: str) -> str:
+        if v not in _ALLOWED_NOISE_PREFS:
+            return "No preference"
+        return v
+
+    @field_validator("session_length")
+    @classmethod
+    def validate_session_length(cls, v: str) -> str:
+        if v not in _ALLOWED_SESSION_LENGTHS:
+            return "Half day (2-4hrs)"
+        return v
+
+    @field_validator("must_haves")
+    @classmethod
+    def validate_must_haves(cls, v: list[str]) -> list[str]:
+        return [item for item in v if item in _ALLOWED_MUST_HAVES][:6]
 
 
 class RecommendRequest(BaseModel):
-    query: str
+    query: str = Field(..., min_length=3, max_length=300)
     preferences: UserPreferences | None = None
 
 
@@ -156,12 +190,11 @@ def get_spots():
 def recommend_spots(req: RecommendRequest):
     global _last_gemini_call
 
-    if len(req.query.strip()) < 3:
-        raise HTTPException(status_code=400, detail="Query must be at least 3 characters.")
-
-    now = time.time()
-    if now - _last_gemini_call < 4.0:
-        raise HTTPException(status_code=429, detail="Please wait a few seconds between requests.")
+    with _gemini_lock:
+        now = time.time()
+        if now - _last_gemini_call < 4.0:
+            raise HTTPException(status_code=429, detail="Please wait a few seconds between requests.")
+        _last_gemini_call = now
 
     if not GEMINI_API_KEY.strip():
         raise HTTPException(
@@ -219,7 +252,6 @@ def recommend_spots(req: RecommendRequest):
     )
 
     try:
-        _last_gemini_call = time.time()
         response = get_gemini_client().models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
